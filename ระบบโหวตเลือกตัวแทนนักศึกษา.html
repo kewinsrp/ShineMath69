@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ระบบโหวตเลือกตัวแทนนักศึกษา</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--tx:#1b1f2a;--mu:#6b7280;--ac:#4f46e5;--ac2:#e0e7ff;--ok:#16a34a;--bad:#dc2626;--bd:#e5e7eb;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1117;--card:#181b25;--tx:#eceef5;--mu:#9aa1b2;--ac:#818cf8;--ac2:#2a2e52;--bd:#2a2f3d}}
+:root[data-theme="dark"]{--bg:#0f1117;--card:#181b25;--tx:#eceef5;--mu:#9aa1b2;--ac:#818cf8;--ac2:#2a2e52;--bd:#2a2f3d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'Noto Sans Thai',system-ui,sans-serif;line-height:1.6}
+.w{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:1.25rem;margin:.2rem 0 1rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:12px}
+.mu{color:var(--mu);font-size:.9rem}
+.timer{font-size:2.6rem;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;color:var(--ac)}
+.pos{font-size:1.4rem;font-weight:700;text-align:center;margin:.2rem 0}
+.cand{display:block;width:100%;text-align:left;padding:14px;margin:8px 0;border-radius:12px;border:2px solid var(--bd);background:var(--card);color:var(--tx);font:inherit;font-size:1.05rem;cursor:pointer}
+.cand.sel{border-color:var(--ac);background:var(--ac2);font-weight:600}
+button.b{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 16px;background:var(--ac);color:#fff;cursor:pointer;width:100%}
+button.b.g{background:var(--ac2);color:var(--ac)}
+button.b.r{background:var(--bad)}
+button:disabled{opacity:.5}
+select,textarea,input{font:inherit;width:100%;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}
+textarea{min-height:120px}
+.row{display:flex;gap:8px;margin-top:8px}
+.bar{height:26px;border-radius:7px;background:var(--ac2);margin:4px 0 10px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--ac)}
+.lb{display:flex;justify-content:space-between}
+.ok{color:var(--ok);font-weight:600;text-align:center}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;background:var(--ac2);color:var(--ac);font-size:.8rem;margin:2px}
+.chip.done{background:#dcfce7;color:#166534}
+</style>
+</head>
+<body>
+<div class="w"><h1>🗳️ ระบบโหวตเลือกตัวแทนนักศึกษา</h1><div id="app"><p class="mu">กำลังโหลด…</p></div></div>
+<script>
+const POS=["ประธานรุ่น","ประธาน7นำ","รองประธาน7นำ","ฝ่ายประสานงาน","ฝ่ายสวัสดิการ","ฝ่ายพยาบาล","ฝ่ายสันทนาการ","เลขานุการ","เหรัญญิกรุ่น","หัวหน้าห้อง1","เหรัญญิกห้อง1","หัวหน้าห้อง2","เหรัญญิกห้อง2","หัวหน้าห้อง3","เหรัญญิกห้อง3"];
+const $=document.getElementById("app");
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let db=null,user=null,host=false,uid=null,st=null,results={},votes=[],mine={},pick=null,selPos=0,draft={};
+async function upd(ref,data){try{await ref.update(data)}catch(e){await ref.set(data)}}
+function tally(){
+  if(!st||st.pos==null)return{};
+  const k="p"+st.pos+"_"+st.round,c={};
+  (st.cands||[]).forEach(n=>c[n]=0);
+  votes.forEach(v=>{const x=v[k];if(x!=null&&x in c)c[x]++});
+  return c;
+}
+async function openVote(){
+  const names=(draft.names||"").split("\n").map(s=>s.trim()).filter(Boolean);
+  if(names.length<2){alert("ใส่ชื่อผู้สมัครอย่างน้อย 2 คน (1 คนต่อบรรทัด)");return}
+  const mins=Math.max(1,Number(draft.mins)||5);
+  await db.doc("election/state").set({pos:selPos,cands:names,status:"open",endsAt:Date.now()+mins*60000,round:(st?.round||0)+1});
+  pick=null;
+}
+async function closeVote(){
+  if(!st||st.status!=="open")return;
+  const c=tally(),tot=Object.values(c).reduce((a,b)=>a+b,0);
+  await upd(db.doc("election/results"),{["p"+st.pos]:{counts:c,total:tot}});
+  await db.doc("election/state").update({status:"closed"});
+}
+async function submit(){
+  if(pick==null||!uid)return;
+  const k="p"+st.pos+"_"+st.round;
+  await upd(db.doc("votes/"+uid),{[k]:st.cands[pick]});
+}
+function resultsHTML(c){
+  const tot=Object.values(c).reduce((a,b)=>a+b,0)||1;
+  return Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="lb"><span>${esc(n)}</span><b>${v} (${Math.round(v*100/tot)}%)</b></div><div class="bar"><i style="width:${v*100/tot}%"></i></div>`).join("");
+}
+function left(){return st&&st.status==="open"?Math.max(0,Math.ceil((st.endsAt-Date.now())/1000)):0}
+function fmt(s){return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")}
+function render(){
+  if(!db){$.innerHTML='<div class="card">ต้องเปิดผ่านลิงก์และเข้าสู่ระบบก่อนจึงจะโหวตได้</div>';return}
+  let h="";
+  const open=st&&st.status==="open"&&left()>0;
+  if(host){
+    const c=tally(),n=votes.filter(v=>st&&st.pos!=null&&v["p"+st.pos+"_"+st.round]!=null).length;
+    h+=`<div class="card"><b>แผงควบคุมโฮสต์</b><p class="mu">เลือกตำแหน่ง ใส่ชื่อผู้สมัคร แล้วกดเปิดโหวต หน้าจอผู้โหวตจะขึ้นทันที</p>
+    <select id="sp">${POS.map((p,i)=>`<option value="${i}" ${i===selPos?"selected":""}>${i+1}. ${esc(p)}${results["p"+i]?" ✓":""}</option>`).join("")}</select>
+    <textarea id="nm" placeholder="ชื่อผู้สมัคร 1 คนต่อบรรทัด">${esc(draft.names||"")}</textarea>
+    <div class="row"><input id="mn" type="number" min="1" value="${esc(draft.mins||5)}" style="max-width:90px"><span class="mu" style="align-self:center">นาที</span></div>
+    <div class="row"><button class="b" id="go" ${open?"disabled":""}>▶ เปิดโหวต</button><button class="b r" id="stop" ${open?"":"disabled"}>■ ปิดโหวต</button></div></div>`;
+    if(st&&st.pos!=null)h+=`<div class="card"><div class="pos">${esc(POS[st.pos])}</div><div class="mu" style="text-align:center">${open?"กำลังโหวต":"ปิดโหวตแล้ว"} · โหวตแล้ว ${n} คน</div>${open?`<div class="timer" id="tm">${fmt(left())}</div>`:""}${resultsHTML(c)}</div>`;
+    const done=Object.keys(results);
+    h+=`<div class="card"><b>สรุปผล</b><div>${POS.map((p,i)=>`<span class="chip ${results["p"+i]?"done":""}">${esc(p)}</span>`).join("")}</div>${done.map(k=>{const r=results[k],w=Object.entries(r.counts).sort((a,b)=>b[1]-a[1])[0];return `<p>${esc(POS[+k.slice(1)])}: <b>${w?esc(w[0]):"-"}</b> <span class="mu">(${w?w[1]:0}/${r.total} โหวต)</span></p>`}).join("")}</div>`;
+  } else if(open){
+    const k="p"+st.pos+"_"+st.round,voted=mine[k];
+    h+=`<div class="card"><div class="mu" style="text-align:center">กำลังโหวตตำแหน่ง</div><div class="pos">${esc(POS[st.pos])}</div><div class="timer" id="tm">${fmt(left())}</div>
+    ${voted?`<p class="ok">✓ โหวตแล้ว: ${esc(voted)}</p><p class="mu" style="text-align:center">เปลี่ยนใจได้จนกว่าจะหมดเวลา</p>`:""}
+    ${st.cands.map((n,i)=>`<button class="cand ${pick===i||(pick==null&&voted===n)?"sel":""}" data-i="${i}">${esc(n)}</button>`).join("")}
+    <button class="b" id="ok" ${pick==null?"disabled":""}>ยืนยันการโหวต</button></div>`;
+  } else {
+    h+=`<div class="card" style="text-align:center"><p class="pos">⏳</p><p>${st&&st.status==="closed"?"ปิดโหวตแล้ว รอประกาศผลจากโฮสต์":"รอโฮสต์เปิดโหวต"}</p><p class="mu">หน้านี้จะเปลี่ยนเองอัตโนมัติ ไม่ต้องรีเฟรช</p></div>`;
+  }
+  const keep=document.activeElement&&document.activeElement.id;
+  $.innerHTML=h;
+  const g=id=>document.getElementById(id);
+  if(host){
+    g("sp").onchange=e=>{selPos=+e.target.value};
+    g("nm").oninput=e=>{draft.names=e.target.value};
+    g("mn").oninput=e=>{draft.mins=e.target.value};
+    g("go").onclick=openVote;g("stop").onclick=closeVote;
+    if(keep&&g(keep)&&keep!=="go")g(keep).focus();
+  }else if(open){
+    $.querySelectorAll(".cand").forEach(b=>b.onclick=()=>{pick=+b.dataset.i;render()});
+    g("ok").onclick=submit;
+  }
+}
+setInterval(()=>{
+  const t=document.getElementById("tm");
+  if(t)t.textContent=fmt(left());
+  if(st&&st.status==="open"&&left()===0){if(host)closeVote();else render()}
+},1000);
+(async()=>{
+  try{db=await claude.use("db");user=await claude.use("user")}catch(e){}
+  if(!db){render();return}
+  host=user?await user.canEdit():false;
+  uid=user?await user.id():null;
+  db.doc("election/state").onSnapshot(s=>{st=s.exists?s.data():null;render()});
+  db.doc("election/results").onSnapshot(s=>{results=s.exists?s.data():{};if(host)render()});
+  if(host)db.collection("votes").onSnapshot(s=>{votes=s.docs.map(d=>d.data());render()});
+  else if(uid)db.doc("votes/"+uid).onSnapshot(s=>{mine=s.exists?s.data():{};render()});
+})();
+</script>
+</body>
+</html>
